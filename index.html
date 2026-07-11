@@ -355,6 +355,18 @@ async function deleteFileByUrl(url){
 }
 
 /* =========================================================================
+   HOMEPAGE STAT NUMBERS (shown on the public homepage stat strip)
+   These are fixed display values, NOT pulled from Firestore counts.
+   Edit the strings below any time to update what visitors see.
+   ========================================================================= */
+const HOMEPAGE_STATS = {
+  activeBranches: '2+',
+  expertCoaches: '5+',
+  studentsTrained: '500+',
+  medalsWon: '200+'
+};
+
+/* =========================================================================
    GLOBAL STATE
    ========================================================================= */
 const state = {
@@ -541,13 +553,10 @@ async function safeFetchAll(name, opts){
    PUBLIC PAGE: HOME
    ========================================================================= */
 async function renderHome(){
-  const [branches, coaches, achievements, events, tournaments] = await Promise.all([
-    safeFetchAll('branches'), safeFetchAll('coaches'), safeFetchAll('achievements',{orderField:'year',orderDir:'desc'}),
+  const [branches, achievements, events, tournaments] = await Promise.all([
+    safeFetchAll('branches'), safeFetchAll('achievements',{orderField:'year',orderDir:'desc'}),
     safeFetchAll('events'), safeFetchAll('tournaments')
   ]);
-  const openBranches = branches.filter(b=>b.status!=='closed');
-  const studentsCount = (await safeFetchAll('students')).length;
-  const medalsCount = achievements.length;
   const upcoming = [...events,...tournaments].filter(e=>e.status!=='completed').slice(0,3);
   const champions = achievements.slice(0,4);
 
@@ -569,10 +578,10 @@ async function renderHome(){
   <section class="section dark">
     <div class="container">
       <div class="stats">
-        <div class="stat"><h3>${openBranches.length}</h3><span>Active Branches</span></div>
-        <div class="stat"><h3>${coaches.length}</h3><span>Expert Coaches</span></div>
-        <div class="stat"><h3>${studentsCount}</h3><span>Students Trained</span></div>
-        <div class="stat"><h3>${medalsCount}</h3><span>Medals Won</span></div>
+        <div class="stat"><h3>${HOMEPAGE_STATS.activeBranches}</h3><span>Active Branches</span></div>
+        <div class="stat"><h3>${HOMEPAGE_STATS.expertCoaches}</h3><span>Expert Coaches</span></div>
+        <div class="stat"><h3>${HOMEPAGE_STATS.studentsTrained}</h3><span>Students Trained</span></div>
+        <div class="stat"><h3>${HOMEPAGE_STATS.medalsWon}</h3><span>Medals Won</span></div>
       </div>
     </div>
   </section>
