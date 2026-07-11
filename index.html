@@ -13,6 +13,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 <style>
 :root{
   --maroon-dark:#3c0b12;
@@ -1454,6 +1455,7 @@ async function adminRegistrations(){
         ${allItems.map(i=>`<option value="${i.key}" ${state.regFilter===i.key?'selected':''}>${escapeHtml(i.label)}</option>`).join('')}
       </select>
       <button class="btn btn-maroon btn-sm" id="export-csv-btn">Export CSV</button>
+      <button class="btn btn-outline btn-sm" id="export-xlsx-btn">Export Excel (.xlsx)</button>
     </div>
   </div>
   <div class="panel">
@@ -1522,6 +1524,68 @@ function attachAdminRegistrations(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
     toast('CSV exported!','success');
+  });
+
+  $('#export-xlsx-btn').addEventListener('click', ()=>{
+    const filtered = state.regFilter==='all' ? regs : regs.filter(r=>`${r.linkedType}:${r.linkedId}`===state.regFilter);
+    if(!filtered.length){ toast('Nothing to export for this filter.','error'); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    if(state.regFilter!=='all'){
+      // Single event/tournament: one sheet, real columns per form field
+      const form = forms.find(f=>f.id===filtered[0].formId);
+      const fields = (form?.fields||[]).filter(f=>!['heading','description','divider'].includes(f.type));
+      const headerRow = ['Registration ID','Status','Submitted At', ...fields.map(f=>f.label)];
+      const dataRows = filtered.map(r=>{
+        const base = [r.regId, r.status, fmtDate(r.createdAt)];
+        const answers = fields.map(f=>{
+          const v = r.data ? r.data[f.id] : '';
+          return Array.isArray(v) ? v.join(', ') : (v ?? '');
+        });
+        return [...base, ...answers];
+      });
+      const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+      ws['!cols'] = headerRow.map(h => ({ wch: Math.max(12, h.length + 2) }));
+      XLSX.utils.book_append_sheet(wb, ws, 'Registrations');
+    } else {
+      // All events/tournaments: one sheet per item, plus a combined summary sheet
+      const grouped = {};
+      filtered.forEach(r=>{
+        const key = `${r.linkedType}:${r.linkedId}`;
+        (grouped[key] = grouped[key] || []).push(r);
+      });
+      const summaryRows = [['Registration ID','For','Type','Status','Submitted At']];
+
+      Object.entries(grouped).forEach(([key, group])=>{
+        const form = forms.find(f=>f.id===group[0].formId);
+        const fields = (form?.fields||[]).filter(f=>!['heading','description','divider'].includes(f.type));
+        const headerRow = ['Registration ID','Status','Submitted At', ...fields.map(f=>f.label)];
+        const dataRows = group.map(r=>{
+          const base = [r.regId, r.status, fmtDate(r.createdAt)];
+          const answers = fields.map(f=>{
+            const v = r.data ? r.data[f.id] : '';
+            return Array.isArray(v) ? v.join(', ') : (v ?? '');
+          });
+          summaryRows.push([r.regId, key.split(':')[1], r.linkedType, r.status, fmtDate(r.createdAt)]);
+          return [...base, ...answers];
+        });
+        const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+        ws['!cols'] = headerRow.map(h => ({ wch: Math.max(12, h.length + 2) }));
+        // Sheet names can't exceed 31 chars or contain : \ / ? * [ ]
+        const safeName = key.replace(/[:\\/?*\[\]]/g, '_').slice(0, 31) || 'Sheet';
+        XLSX.utils.book_append_sheet(wb, ws, safeName);
+      });
+
+      const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
+      XLSX.utils.book_append_sheet(wb, summaryWs, 'All Registrations');
+    }
+
+    const filename = state.regFilter==='all'
+      ? 'registrations_all.xlsx'
+      : `registrations_${state.regFilter.replace(':','_')}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    toast('Excel file exported!','success');
   });
 
   $$('[data-view]').forEach(b=>b.addEventListener('click',()=>{
