@@ -360,10 +360,10 @@ async function deleteFileByUrl(url){
    Edit the strings below any time to update what visitors see.
    ========================================================================= */
 const HOMEPAGE_STATS = {
-  activeBranches: '2+',
-  expertCoaches: '5+',
+  activeBranches: '5+',
+  expertCoaches: '10+',
   studentsTrained: '500+',
-  medalsWon: '200+'
+  medalsWon: '50+'
 };
 
 /* =========================================================================
@@ -714,7 +714,7 @@ async function renderAbout(){
    PUBLIC PAGE: COACHES
    ========================================================================= */
 async function renderCoaches(){
-  const coaches = await safeFetchAll('coaches',{orderField:'order'});
+  const coaches = await safeFetchAll('coaches');
   return `
   <section class="hero" style="padding:70px 28px"><div class="container"><div class="eyebrow">Guided by Masters</div><h1>Our Coaches</h1></div></section>
   <section class="section"><div class="container">
@@ -737,7 +737,7 @@ async function renderCoaches(){
    PUBLIC PAGE: BRANCHES
    ========================================================================= */
 async function renderBranches(){
-  const branches = await safeFetchAll('branches',{orderField:'order'});
+  const branches = await safeFetchAll('branches');
   return `
   <section class="hero" style="padding:70px 28px"><div class="container"><div class="eyebrow">Across the Region</div><h1>Our Branches</h1></div></section>
   <section class="section"><div class="container">
@@ -751,7 +751,7 @@ async function renderBranches(){
    PUBLIC PAGE: COURSES
    ========================================================================= */
 async function renderCourses(){
-  const courses = await safeFetchAll('courses',{orderField:'order'});
+  const courses = await safeFetchAll('courses');
   return `
   <section class="hero" style="padding:70px 28px"><div class="container"><div class="eyebrow">Learn the Art</div><h1>Courses &amp; Programs</h1></div></section>
   <section class="section"><div class="container">
