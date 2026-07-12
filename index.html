@@ -360,10 +360,10 @@ async function deleteFileByUrl(url){
    Edit the strings below any time to update what visitors see.
    ========================================================================= */
 const HOMEPAGE_STATS = {
-  activeBranches: '2+',
-  expertCoaches: '5+',
+  activeBranches: '5+',
+  expertCoaches: '10+',
   studentsTrained: '500+',
-  medalsWon: '200+'
+  medalsWon: '50+'
 };
 
 /* =========================================================================
@@ -1042,28 +1042,157 @@ async function attachRegistrationForm(kind, itemId){
       panel.innerHTML = `<h3>Registration</h3><p>The registration form for this ${kind==='events'?'event':'tournament'} is not published yet. Please check back soon.</p>`;
       return;
     }
-    panel.innerHTML = `<h3>${escapeHtml(formDoc.title||'Register Now')}</h3>
-      <form id="reg-dyn-form">${renderDynamicFormHtml(formDoc)}
-      <button class="btn btn-gold" type="submit" style="width:100%;justify-content:center">Submit Registration</button></form>`;
-    attachDynamicFormInteractions(panel);
-    $('#reg-dyn-form').addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const btn = e.target.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Submitting...';
-      try{
-        const data = await collectDynamicFormData(e.target, formDoc);
-        const regId = 'REG-'+Date.now().toString(36).toUpperCase();
-        await addItem('registrations', { formId: formDoc.id, linkedType: kind.slice(0,-1), linkedId: itemId, regId, data, status:'pending' });
-        panel.innerHTML = `<h3>Registration Received!</h3><p>Your registration ID is:</p><p style="font-family:var(--font-display);font-size:1.4rem;color:var(--maroon)">${regId}</p><p>Please save this ID for reference. Our team will review and confirm your registration.</p>`;
-        toast('Registration submitted successfully!','success');
-      }catch(err){
-        toast('Submission failed: '+err.message,'error');
-        btn.disabled=false; btn.textContent='Submit Registration';
-      }
+    panel.innerHTML = `
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm btn-maroon" id="reg-mode-single">Register</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="reg-mode-bulk">Bulk Register (Multiple Students)</button>
+      </div>
+      <div id="reg-mode-body"></div>
+    `;
+    renderPublicSingleForm(formDoc, kind, itemId);
+
+    $('#reg-mode-single').addEventListener('click', ()=>{
+      $('#reg-mode-single').classList.replace('btn-ghost','btn-maroon');
+      $('#reg-mode-bulk').classList.replace('btn-maroon','btn-ghost');
+      renderPublicSingleForm(formDoc, kind, itemId);
+    });
+    $('#reg-mode-bulk').addEventListener('click', ()=>{
+      $('#reg-mode-bulk').classList.replace('btn-ghost','btn-maroon');
+      $('#reg-mode-single').classList.replace('btn-maroon','btn-ghost');
+      renderPublicBulkForm(formDoc, kind, itemId);
     });
   }catch(err){
     panel.innerHTML = emptyState('Could not load registration form: '+err.message);
   }
+}
+
+function renderPublicSingleForm(formDoc, kind, itemId){
+  const body = $('#reg-mode-body');
+  body.innerHTML = `<h3>${escapeHtml(formDoc.title||'Register Now')}</h3>
+    <form id="reg-dyn-form">${renderDynamicFormHtml(formDoc)}
+    <button class="btn btn-gold" type="submit" style="width:100%;justify-content:center">Submit Registration</button></form>`;
+  attachDynamicFormInteractions(body);
+  $('#reg-dyn-form').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true; btn.textContent = 'Submitting...';
+    try{
+      const data = await collectDynamicFormData(e.target, formDoc);
+      const regId = 'REG-'+Date.now().toString(36).toUpperCase();
+      await addItem('registrations', { formId: formDoc.id, linkedType: kind.slice(0,-1), linkedId: itemId, regId, data, status:'pending' });
+      body.innerHTML = `<h3>Registration Received!</h3><p>Your registration ID is:</p><p style="font-family:var(--font-display);font-size:1.4rem;color:var(--maroon)">${regId}</p><p>Please save this ID for reference. Our team will review and confirm your registration.</p>`;
+      toast('Registration submitted successfully!','success');
+    }catch(err){
+      toast('Submission failed: '+err.message,'error');
+      btn.disabled=false; btn.textContent='Submit Registration';
+    }
+  });
+}
+
+/* Prefix a rendered field's name/id/for/data-fid attributes with a unique
+   entry id, so several copies of the same form can live on one page at once
+   without their inputs (especially radio/checkbox groups) colliding. */
+function renderDynamicFieldHtmlPrefixed(f, prefix){
+  const html = renderDynamicFieldHtml(f);
+  if(['heading','description','divider'].includes(f.type)) return html;
+  return html.split(f.id).join(`${prefix}__${f.id}`);
+}
+/* Same as collectDynamicFormData, but reads from a prefixed entry form. */
+async function collectDynamicFormDataPrefixed(formEl, schema, prefix){
+  const data = {};
+  const fd = new FormData(formEl);
+  for(const f of (schema.fields||[])){
+    if(['heading','description','divider'].includes(f.type)) continue;
+    const nm = `${prefix}__${f.id}`;
+    if(f.type==='checkbox'){ data[f.id] = fd.getAll(nm); }
+    else if(f.type==='file'){
+      const file = formEl.querySelector(`[name="${nm}"]`)?.files[0];
+      if(file){ data[f.id] = await uploadFile(file, 'registrations'); }
+      else data[f.id] = '';
+    }
+    else { data[f.id] = fd.get(nm) || ''; }
+  }
+  return data;
+}
+
+/* Public bulk registration: a coach/school/parent representative can register
+   several students at once (e.g. a whole team) by filling out the same
+   registration form multiple times, right on this page, then submitting all
+   of the entries together in one go — no spreadsheet needed. */
+function renderPublicBulkForm(formDoc, kind, itemId){
+  const body = $('#reg-mode-body');
+  const bulk = { entries: [{id:uid()},{id:uid()}] }; // start with 2 blank entries
+
+  function entryBlockHtml(entry, idx){
+    return `
+    <div class="panel" data-entry-wrap="${entry.id}" style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px">
+        <h4 style="margin:0">Student ${idx+1}</h4>
+        ${bulk.entries.length>1 ? `<button type="button" class="btn btn-ghost btn-sm" data-remove-entry="${entry.id}">Remove</button>` : ''}
+      </div>
+      <form data-entry-form="${entry.id}" novalidate>${(formDoc.fields||[]).map(f=>renderDynamicFieldHtmlPrefixed(f,entry.id)).join('')}</form>
+    </div>`;
+  }
+
+  function rerender(){
+    const n = bulk.entries.length;
+    body.innerHTML = `
+      <h3>Bulk Register Multiple Students</h3>
+      <p style="font-size:.88rem;color:var(--ink-soft)">Registering a team or group? Fill in a form below for each student — add as many as you need — then submit them all together.</p>
+      <div id="pub-bulk-entries">${bulk.entries.map(entryBlockHtml).join('')}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 16px">
+        <button type="button" class="btn btn-maroon btn-sm" id="pub-bulk-add">+ Add Another Student</button>
+      </div>
+      <p id="pub-bulk-err" style="color:var(--danger);font-size:.85rem;margin-bottom:10px"></p>
+      <button type="button" class="btn btn-gold" id="pub-bulk-submit" style="width:100%;justify-content:center">Submit ${n} Registration${n===1?'':'s'}</button>
+    `;
+    attachDynamicFormInteractions($('#pub-bulk-entries'));
+    $('#pub-bulk-add').addEventListener('click', ()=>{ bulk.entries.push({id:uid()}); rerender(); });
+    $$('[data-remove-entry]').forEach(btn=>btn.addEventListener('click', ()=>{
+      if(bulk.entries.length<=1) return;
+      bulk.entries = bulk.entries.filter(en=>en.id!==btn.dataset.removeEntry);
+      rerender();
+    }));
+    $('#pub-bulk-submit').addEventListener('click', submitAll);
+  }
+
+  async function submitAll(){
+    const btn = $('#pub-bulk-submit');
+    const errEl = $('#pub-bulk-err');
+    errEl.textContent = '';
+    for(const entry of bulk.entries){
+      const form = $(`[data-entry-form="${entry.id}"]`);
+      if(!form.checkValidity()){
+        form.reportValidity();
+        $(`[data-entry-wrap="${entry.id}"]`).scrollIntoView({behavior:'smooth', block:'center'});
+        errEl.textContent = 'Please fill in all required fields before submitting.';
+        return;
+      }
+    }
+    const n = bulk.entries.length;
+    btn.disabled = true; btn.textContent = 'Submitting...';
+    try{
+      const regIds = [];
+      let i = 0;
+      for(const entry of bulk.entries){
+        const form = $(`[data-entry-form="${entry.id}"]`);
+        const data = await collectDynamicFormDataPrefixed(form, formDoc, entry.id);
+        const regId = 'REG-' + Date.now().toString(36).toUpperCase() + '-' + (i++);
+        await addItem('registrations', { formId: formDoc.id, linkedType: kind.slice(0,-1), linkedId: itemId, regId, data, status: 'pending' });
+        regIds.push(regId);
+      }
+      body.innerHTML = `<h3>${regIds.length} Registrations Received!</h3>
+        <p>Your registration IDs:</p>
+        <p style="font-family:var(--font-display);font-size:1rem;color:var(--maroon);word-break:break-all">${regIds.join(', ')}</p>
+        <p>Please save these IDs for reference. Our team will review and confirm each registration.</p>`;
+      toast(`${regIds.length} registrations submitted!`, 'success');
+    }catch(err){
+      toast('Submission failed: '+err.message, 'error');
+      btn.disabled = false; btn.textContent = `Submit ${n} Registration${n===1?'':'s'}`;
+    }
+  }
+
+  rerender();
 }
 </script>
 <script>
@@ -1443,6 +1572,8 @@ async function adminRegistrations(){
   ]);
   adminCache.registrations = regs;
   adminCache.regFormsIndex = forms;
+  adminCache.regEvents = events;
+  adminCache.regTournaments = tournaments;
   const allItems = [
     ...events.map(e=>({key:`event:${e.id}`, label:`[Event] ${e.title}`})),
     ...tournaments.map(t=>({key:`tournament:${t.id}`, label:`[Tournament] ${t.title}`}))
@@ -1463,6 +1594,7 @@ async function adminRegistrations(){
         <option value="all" ${state.regFilter==='all'?'selected':''}>All Events &amp; Tournaments</option>
         ${allItems.map(i=>`<option value="${i.key}" ${state.regFilter===i.key?'selected':''}>${escapeHtml(i.label)}</option>`).join('')}
       </select>
+      <button class="btn btn-gold btn-sm" id="bulk-register-btn">Bulk Register Students</button>
       <button class="btn btn-maroon btn-sm" id="export-csv-btn">Export CSV</button>
       <button class="btn btn-outline btn-sm" id="export-xlsx-btn">Export Excel (.xlsx)</button>
     </div>
@@ -1476,6 +1608,7 @@ async function adminRegistrations(){
           <button data-view="${r.id}">View</button>
           <button data-approve="${r.id}">Approve</button>
           <button data-reject="${r.id}">Reject</button>
+          <button data-delete-reg="${r.id}">Delete</button>
         </td></tr>`).join('')}</tbody></table>`
       : emptyState(regs.length ? 'No registrations match this filter.' : 'No registrations received yet.')}
   </div>`;
@@ -1599,7 +1732,21 @@ function attachAdminRegistrations(){
 
   $$('[data-view]').forEach(b=>b.addEventListener('click',()=>{
     const r = regs.find(x=>x.id===b.dataset.view);
-    const rows = Object.entries(r.data||{}).map(([k,v])=>`<tr><td style="font-weight:600">${escapeHtml(k)}</td><td>${Array.isArray(v)?escapeHtml(v.join(', ')):(typeof v==='string' && v.startsWith('http'))?`<a href="${v}" target="_blank">View File</a>`:escapeHtml(v)}</td></tr>`).join('');
+    const form = forms.find(f=>f.id===r.formId);
+    const fieldMap = {};
+    (form?.fields||[]).forEach(f=>{ fieldMap[f.id] = f; });
+    // Order rows by the form's field order when we know it; fall back to raw key for
+    // any answer whose field was since deleted from the form (so no data is silently hidden).
+    const orderedKeys = form
+      ? [...(form.fields||[]).map(f=>f.id).filter(id=>Object.prototype.hasOwnProperty.call(r.data||{}, id)),
+         ...Object.keys(r.data||{}).filter(k=>!(form.fields||[]).some(f=>f.id===k))]
+      : Object.keys(r.data||{});
+    const rows = orderedKeys.map(k=>{
+      const v = (r.data||{})[k];
+      const label = fieldMap[k] ? fieldMap[k].label : `${k} (field removed from form)`;
+      const display = Array.isArray(v) ? escapeHtml(v.join(', ')) : (typeof v==='string' && v.startsWith('http')) ? `<a href="${v}" target="_blank">View File</a>` : escapeHtml(v);
+      return `<tr><td style="font-weight:600">${escapeHtml(label)}</td><td>${display}</td></tr>`;
+    }).join('');
     openModal(`<h3>Registration ${escapeHtml(r.regId)}</h3><table class="admin-table"><tbody>${rows}</tbody></table>
       <div style="text-align:right;margin-top:16px"><button class="btn btn-ghost btn-sm" data-close>Close</button></div>`);
   }));
@@ -1609,7 +1756,138 @@ function attachAdminRegistrations(){
   $$('[data-reject]').forEach(b=>b.addEventListener('click', async ()=>{
     await updateItem('registrations', b.dataset.reject, {status:'rejected'}); toast('Rejected'); route();
   }));
+  $$('[data-delete-reg]').forEach(b=>b.addEventListener('click', ()=>{
+    const r = regs.find(x=>x.id===b.dataset.deleteReg);
+    confirmAction(`Permanently delete registration ${r?.regId||''}? This cannot be undone.`, async ()=>{
+      try{
+        await deleteItem('registrations', b.dataset.deleteReg);
+        toast('Registration deleted','success');
+        route();
+      }catch(err){ toast('Delete failed: '+err.message,'error'); }
+    });
+  }));
+  $('#bulk-register-btn')?.addEventListener('click', openBulkRegisterModal);
 }
+
+/* =========================================================================
+   ADMIN: BULK REGISTER STUDENTS (spreadsheet import)
+   Lets an admin register many students at once for a single event or
+   tournament, using a downloadable template filled in Excel/Sheets and
+   re-uploaded, instead of each student using the public form individually.
+   ========================================================================= */
+function openBulkRegisterModal(){
+  const events = adminCache.regEvents||[];
+  const tournaments = adminCache.regTournaments||[];
+  const forms = adminCache.regFormsIndex||[];
+  const items = [
+    ...events.map(e=>({key:`event:${e.id}`, type:'event', id:e.id, label:`[Event] ${e.title}`})),
+    ...tournaments.map(t=>({key:`tournament:${t.id}`, type:'tournament', id:t.id, label:`[Tournament] ${t.title}`}))
+  ].filter(i => forms.some(f=>f.linkedTo && f.linkedTo.type===i.type && f.linkedTo.id===i.id));
+
+  if(!items.length){
+    openModal(`<h3>Bulk Register Students</h3>
+      <p>No event or tournament has a registration form designed yet. Go to Events or Tournaments, click "Design Form" on the one you want, then come back here.</p>
+      <div style="text-align:right;margin-top:16px"><button class="btn btn-ghost btn-sm" data-close>Close</button></div>`);
+    return;
+  }
+
+  openModal(`
+    <h3>Bulk Register Students</h3>
+    <p style="color:var(--ink-soft);font-size:.88rem">Register many students for one event or tournament at once using a spreadsheet, instead of each student filling the public form individually.</p>
+    <div class="form-field"><label>Event / Tournament <span class="req">*</span></label>
+      <select id="bulk-item-select"><option value="">Select...</option>${items.map(i=>`<option value="${i.key}">${escapeHtml(i.label)}</option>`).join('')}</select>
+    </div>
+    <div id="bulk-body"></div>
+    <div style="text-align:right;margin-top:16px"><button class="btn btn-ghost btn-sm" data-close>Close</button></div>
+  `);
+
+  $('#bulk-item-select').addEventListener('change', (e)=> renderBulkBody(e.target.value, items, forms));
+}
+
+function renderBulkBody(key, items, forms){
+  const body = $('#bulk-body');
+  if(!key){ body.innerHTML=''; return; }
+  const item = items.find(i=>i.key===key);
+  const form = forms.find(f=>f.linkedTo && f.linkedTo.type===item.type && f.linkedTo.id===item.id);
+  const fields = (form?.fields||[]).filter(f=>!['heading','description','divider'].includes(f.type));
+
+  body.innerHTML = `
+    <div class="ornament-divider">${kolamSvg()}</div>
+    <p style="font-size:.85rem;color:var(--ink-soft)">Your file's first row (headers) must match these column names exactly:</p>
+    <p style="font-size:.82rem;background:#f7f2e4;padding:8px 10px;border-radius:4px;word-break:break-word">${fields.map(f=>escapeHtml(f.label)).join(' &middot; ')}</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">
+      <button class="btn btn-outline btn-sm" id="bulk-download-template">Download Template (.xlsx)</button>
+    </div>
+    <div class="form-field"><label>Upload filled spreadsheet (.xlsx or .csv)</label><input type="file" id="bulk-file-input" accept=".xlsx,.xls,.csv"></div>
+    <div id="bulk-preview"></div>
+  `;
+
+  $('#bulk-download-template').addEventListener('click', ()=>{
+    const ws = XLSX.utils.aoa_to_sheet([fields.map(f=>f.label)]);
+    ws['!cols'] = fields.map(f=>({wch: Math.max(14, f.label.length+2)}));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Template');
+    XLSX.writeFile(wb, `bulk_registration_template_${item.type}.xlsx`);
+  });
+
+  $('#bulk-file-input').addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    const preview = $('#bulk-preview');
+    if(!file) return;
+    preview.innerHTML = loaderHtml('Reading file...');
+    try{
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array'});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, {defval:''});
+
+      // Map each row's column-label keys back to the form's field IDs
+      const labelToId = {};
+      fields.forEach(f=>{ labelToId[f.label.trim().toLowerCase()] = f.id; });
+      const parsedRows = rawRows.map(row=>{
+        const mapped = {};
+        Object.entries(row).forEach(([label,val])=>{
+          const fid = labelToId[String(label).trim().toLowerCase()];
+          if(fid) mapped[fid] = val;
+        });
+        return mapped;
+      }).filter(r=>Object.keys(r).length>0);
+
+      if(!parsedRows.length){
+        preview.innerHTML = `<p style="color:var(--danger)">No matching rows found. Make sure your file's header row matches the expected column names above exactly.</p>`;
+        return;
+      }
+
+      const missingRequired = fields.filter(f=>f.required).filter(f=>parsedRows.some(r=>!r[f.id]));
+      preview.innerHTML = `
+        <p style="color:var(--success);font-weight:600">${parsedRows.length} student${parsedRows.length===1?'':'s'} ready to register for "${escapeHtml(item.label)}".</p>
+        ${missingRequired.length ? `<p style="color:var(--danger);font-size:.85rem">Note: some rows are missing a value for required field(s): ${missingRequired.map(f=>escapeHtml(f.label)).join(', ')}. They will still be imported — review them afterwards in the registrations list.</p>` : ''}
+        <button class="btn btn-maroon btn-sm" id="bulk-confirm-btn">Register ${parsedRows.length} Student${parsedRows.length===1?'':'s'}</button>
+      `;
+
+      $('#bulk-confirm-btn').addEventListener('click', async ()=>{
+        const btn = $('#bulk-confirm-btn');
+        btn.disabled = true; btn.textContent = 'Registering...';
+        try{
+          let i = 0;
+          for(const data of parsedRows){
+            const regId = 'REG-' + Date.now().toString(36).toUpperCase() + '-' + (i++);
+            await addItem('registrations', { formId: form.id, linkedType: item.type, linkedId: item.id, regId, data, status: 'approved' });
+          }
+          closeModal();
+          toast(`${parsedRows.length} students registered successfully!`, 'success');
+          route();
+        }catch(err){
+          toast('Bulk registration failed: '+err.message, 'error');
+          btn.disabled = false; btn.textContent = `Register ${parsedRows.length} Students`;
+        }
+      });
+    }catch(err){
+      preview.innerHTML = `<p style="color:var(--danger)">Could not read file: ${escapeHtml(err.message)}</p>`;
+    }
+  });
+}
+
 </script>
 <script>
 /* =========================================================================
