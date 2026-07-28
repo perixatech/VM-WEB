@@ -1574,6 +1574,15 @@ async function adminRegistrations(){
   adminCache.regFormsIndex = forms;
   adminCache.regEvents = events;
   adminCache.regTournaments = tournaments;
+  return renderRegistrationsTableHtml();
+}
+/* Pure render from adminCache — no network fetch, no loader flash.
+   Used for filter changes and after approve/reject/delete so the table
+   redraws instantly instead of reloading the whole admin section. */
+function renderRegistrationsTableHtml(){
+  const regs = adminCache.registrations||[];
+  const events = adminCache.regEvents||[];
+  const tournaments = adminCache.regTournaments||[];
   const allItems = [
     ...events.map(e=>({key:`event:${e.id}`, label:`[Event] ${e.title}`})),
     ...tournaments.map(t=>({key:`tournament:${t.id}`, label:`[Tournament] ${t.title}`}))
@@ -1606,12 +1615,22 @@ async function adminRegistrations(){
         <td><span class="badge ${r.status==='approved'?'published':r.status==='rejected'?'closed':'draft'}">${escapeHtml(r.status)}</span></td>
         <td class="row-actions">
           <button data-view="${r.id}">View</button>
-          <button data-approve="${r.id}">Approve</button>
-          <button data-reject="${r.id}">Reject</button>
+          <button data-approve="${r.id}" ${r.status==='approved'?'disabled':''}>Approve</button>
+          <button data-reject="${r.id}" ${r.status==='rejected'?'disabled':''}>Reject</button>
           <button data-delete-reg="${r.id}">Delete</button>
         </td></tr>`).join('')}</tbody></table>`
       : emptyState(regs.length ? 'No registrations match this filter.' : 'No registrations received yet.')}
   </div>`;
+}
+/* Redraw just the registrations table from cache and re-bind its
+   events — used instead of route() so approving/rejecting/deleting a
+   registration (or changing the filter) doesn't reload the whole
+   admin page or refetch data from Firestore. */
+function refreshRegistrationsView(){
+  const target = $('#admin-page');
+  if(!target) return;
+  target.innerHTML = renderRegistrationsTableHtml();
+  attachAdminRegistrations();
 }
 
 function csvEscape(val){
@@ -1627,7 +1646,7 @@ function attachAdminRegistrations(){
 
   $('#reg-filter').addEventListener('change', (e)=>{
     state.regFilter = e.target.value;
-    route();
+    refreshRegistrationsView();
   });
 
   $('#export-csv-btn').addEventListener('click', ()=>{
@@ -1751,18 +1770,37 @@ function attachAdminRegistrations(){
       <div style="text-align:right;margin-top:16px"><button class="btn btn-ghost btn-sm" data-close>Close</button></div>`);
   }));
   $$('[data-approve]').forEach(b=>b.addEventListener('click', async ()=>{
-    await updateItem('registrations', b.dataset.approve, {status:'approved'}); toast('Approved','success'); route();
+    if(b.disabled) return;
+    b.disabled = true;
+    const id = b.dataset.approve;
+    try{
+      await updateItem('registrations', id, {status:'approved'});
+      const r = regs.find(x=>x.id===id);
+      if(r) r.status = 'approved';
+      toast('Approved','success');
+      refreshRegistrationsView();
+    }catch(err){ toast('Approve failed: '+err.message,'error'); b.disabled = false; }
   }));
   $$('[data-reject]').forEach(b=>b.addEventListener('click', async ()=>{
-    await updateItem('registrations', b.dataset.reject, {status:'rejected'}); toast('Rejected'); route();
+    if(b.disabled) return;
+    b.disabled = true;
+    const id = b.dataset.reject;
+    try{
+      await updateItem('registrations', id, {status:'rejected'});
+      const r = regs.find(x=>x.id===id);
+      if(r) r.status = 'rejected';
+      toast('Rejected');
+      refreshRegistrationsView();
+    }catch(err){ toast('Reject failed: '+err.message,'error'); b.disabled = false; }
   }));
   $$('[data-delete-reg]').forEach(b=>b.addEventListener('click', ()=>{
     const r = regs.find(x=>x.id===b.dataset.deleteReg);
     confirmAction(`Permanently delete registration ${r?.regId||''}? This cannot be undone.`, async ()=>{
       try{
         await deleteItem('registrations', b.dataset.deleteReg);
+        adminCache.registrations = (adminCache.registrations||[]).filter(x=>x.id!==b.dataset.deleteReg);
         toast('Registration deleted','success');
-        route();
+        refreshRegistrationsView();
       }catch(err){ toast('Delete failed: '+err.message,'error'); }
     });
   }));
