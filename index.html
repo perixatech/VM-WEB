@@ -1576,6 +1576,72 @@ async function adminRegistrations(){
   adminCache.regTournaments = tournaments;
   return renderRegistrationsTableHtml();
 }
+
+/* Field types with a fixed set of designed options (Gender, Category, Weight
+   Category, Belt, Age Group, ...) — their dropdown options come from the
+   form design itself. Everything else the admin can design into a form
+   (School/Club Name, Age, Student Name, Phone, etc.) doesn't have designed
+   options, so its dropdown is built from the distinct values actually
+   submitted in the registrations for that event/tournament.
+   Layout-only fields carry no answer data, so they're never offered. */
+const SHORTLIST_CHOICE_TYPES = ['dropdown','radio','checkbox'];
+const SHORTLIST_EXCLUDED_TYPES = ['heading','description','divider'];
+const isShortlistChoiceField = (f)=> SHORTLIST_CHOICE_TYPES.includes(f.type);
+
+/* The form designed for the currently-selected event/tournament, found via
+   the form's linkedTo — or null when "All Events & Tournaments" is picked,
+   since different items can have different forms with different fields. */
+function getRegFilterForm(){
+  if(!state.regFilter || state.regFilter==='all') return null;
+  const [type,id] = state.regFilter.split(':');
+  return (adminCache.regFormsIndex||[]).find(f=>f.linkedTo && f.linkedTo.type===type && f.linkedTo.id===id) || null;
+}
+function getShortlistFields(){
+  const form = getRegFilterForm();
+  return form ? (form.fields||[]).filter(f=>!SHORTLIST_EXCLUDED_TYPES.includes(f.type)) : [];
+}
+/* Registrations for the currently-selected event/tournament, ignoring any
+   shortlist filters — this is the pool each field's dropdown options are
+   drawn from, so every option stays visible regardless of what's currently
+   picked in the other dropdowns. */
+function getRegsForCurrentItem(){
+  const regs = adminCache.registrations||[];
+  if(!state.regFilter) state.regFilter = 'all';
+  return state.regFilter==='all' ? regs : regs.filter(r=>`${r.linkedType}:${r.linkedId}`===state.regFilter);
+}
+/* Dropdown options for one shortlist field: designed options for choice
+   fields, or the distinct values actually submitted for anything else
+   (School/Club Name, Age, Student Name, ...), sorted A→Z. */
+function getShortlistOptions(f){
+  if(isShortlistChoiceField(f)) return f.options||[];
+  const vals = new Set();
+  getRegsForCurrentItem().forEach(r=>{
+    const v = r.data ? r.data[f.id] : undefined;
+    if(v==null) return;
+    (Array.isArray(v) ? v : [v]).forEach(x=>{ const s=String(x).trim(); if(s) vals.add(s); });
+  });
+  return Array.from(vals).sort((a,b)=>a.localeCompare(b, undefined, {sensitivity:'base', numeric:true}));
+}
+/* Registrations filtered by the event/tournament dropdown, then further
+   narrowed by any active shortlist filters — every field the admin designed
+   into the form, not just the category-style ones. Shared by the table
+   render and both export buttons so they always stay in sync. */
+function getFilteredRegistrations(){
+  let list = getRegsForCurrentItem();
+  const shortlistFields = getShortlistFields();
+  const active = state.regFieldFilters || {};
+  if(shortlistFields.length){
+    list = list.filter(r=> shortlistFields.every(f=>{
+      const want = active[f.id];
+      if(!want || want==='all') return true;
+      const have = r.data ? r.data[f.id] : undefined;
+      if(Array.isArray(have)) return have.map(x=>String(x).trim()).includes(want);
+      return have!=null && String(have).trim()===want;
+    }));
+  }
+  return list;
+}
+
 /* Pure render from adminCache — no network fetch, no loader flash.
    Used for filter changes and after approve/reject/delete so the table
    redraws instantly instead of reloading the whole admin section. */
@@ -1593,11 +1659,17 @@ function renderRegistrationsTableHtml(){
     return it ? it.title : '(deleted item)';
   };
   if(!state.regFilter) state.regFilter = 'all';
-  const filtered = state.regFilter==='all' ? regs : regs.filter(r=>`${r.linkedType}:${r.linkedId}`===state.regFilter);
+  if(!state.regFieldFilters) state.regFieldFilters = {};
+  const shortlistFields = getShortlistFields();
+  const filtered = getFilteredRegistrations();
+  const shortlistActive = shortlistFields.some(f=>{
+    const v = state.regFieldFilters[f.id];
+    return v && v!=='all';
+  });
 
   return `
   <div class="admin-topbar">
-    <h2 style="margin:0">Registrations (${filtered.length}${state.regFilter!=='all'?` of ${regs.length}`:''})</h2>
+    <h2 style="margin:0">Registrations (${filtered.length}${(state.regFilter!=='all'||shortlistActive)?` of ${regs.length}`:''})</h2>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <select id="reg-filter" style="padding:9px 12px;border:1px solid #c9bfa4;border-radius:4px;font-family:var(--font-ui)">
         <option value="all" ${state.regFilter==='all'?'selected':''}>All Events &amp; Tournaments</option>
@@ -1608,6 +1680,25 @@ function renderRegistrationsTableHtml(){
       <button class="btn btn-outline btn-sm" id="export-xlsx-btn">Export Excel (.xlsx)</button>
     </div>
   </div>
+  ${shortlistFields.length ? `
+  <div class="panel" style="margin-bottom:18px">
+    <h3 style="margin-top:0;font-size:.95rem">Shortlist by Field</h3>
+    <p style="color:var(--ink-soft);font-size:.82rem;margin-top:-6px">Narrow this event/tournament's registrations by any field designed on its form — Gender, Category, Belt, School/Club Name, Age, Student Name, or anything else the form asks for.</p>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+      ${shortlistFields.map(f=>{
+        const options = getShortlistOptions(f);
+        return `
+        <div class="form-field" style="margin:0;min-width:180px">
+          <label>${escapeHtml(f.label)}</label>
+          <select data-shortlist-field="${f.id}" ${options.length?'':'disabled'}>
+            <option value="all">All</option>
+            ${options.map(o=>`<option value="${escapeHtml(o)}" ${state.regFieldFilters[f.id]===o?'selected':''}>${escapeHtml(o)}</option>`).join('')}
+          </select>
+        </div>`;
+      }).join('')}
+      <button class="btn btn-ghost btn-sm" id="shortlist-clear-btn" ${shortlistActive?'':'disabled'}>Clear Shortlist</button>
+    </div>
+  </div>` : ''}
   <div class="panel">
     ${filtered.length? `<table class="admin-table"><thead><tr><th>Reg ID</th><th>For</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${filtered.map(r=>`<tr>
@@ -1619,12 +1710,12 @@ function renderRegistrationsTableHtml(){
           <button data-reject="${r.id}" ${r.status==='rejected'?'disabled':''}>Reject</button>
           <button data-delete-reg="${r.id}">Delete</button>
         </td></tr>`).join('')}</tbody></table>`
-      : emptyState(regs.length ? 'No registrations match this filter.' : 'No registrations received yet.')}
+      : emptyState(shortlistActive ? 'No registrations match this shortlist filter.' : (regs.length ? 'No registrations match this filter.' : 'No registrations received yet.'))}
   </div>`;
 }
 /* Redraw just the registrations table from cache and re-bind its
    events — used instead of route() so approving/rejecting/deleting a
-   registration (or changing the filter) doesn't reload the whole
+   registration (or changing a filter) doesn't reload the whole
    admin page or refetch data from Firestore. */
 function refreshRegistrationsView(){
   const target = $('#admin-page');
@@ -1646,11 +1737,22 @@ function attachAdminRegistrations(){
 
   $('#reg-filter').addEventListener('change', (e)=>{
     state.regFilter = e.target.value;
+    state.regFieldFilters = {}; // different item = different form/fields, so reset shortlist
+    refreshRegistrationsView();
+  });
+
+  $$('[data-shortlist-field]').forEach(sel=>sel.addEventListener('change', (e)=>{
+    if(!state.regFieldFilters) state.regFieldFilters = {};
+    state.regFieldFilters[e.target.dataset.shortlistField] = e.target.value;
+    refreshRegistrationsView();
+  }));
+  $('#shortlist-clear-btn')?.addEventListener('click', ()=>{
+    state.regFieldFilters = {};
     refreshRegistrationsView();
   });
 
   $('#export-csv-btn').addEventListener('click', ()=>{
-    const filtered = state.regFilter==='all' ? regs : regs.filter(r=>`${r.linkedType}:${r.linkedId}`===state.regFilter);
+    const filtered = getFilteredRegistrations();
     if(!filtered.length){ toast('Nothing to export for this filter.','error'); return; }
 
     let csv, filename;
@@ -1688,7 +1790,7 @@ function attachAdminRegistrations(){
   });
 
   $('#export-xlsx-btn').addEventListener('click', ()=>{
-    const filtered = state.regFilter==='all' ? regs : regs.filter(r=>`${r.linkedType}:${r.linkedId}`===state.regFilter);
+    const filtered = getFilteredRegistrations();
     if(!filtered.length){ toast('Nothing to export for this filter.','error'); return; }
 
     const wb = XLSX.utils.book_new();
