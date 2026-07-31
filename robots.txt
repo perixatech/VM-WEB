@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://perixatech.github.io/VM-WEB/sitemap.xml
